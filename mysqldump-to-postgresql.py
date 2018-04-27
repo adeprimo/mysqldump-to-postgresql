@@ -234,6 +234,39 @@ def collect_truncations(args, tables):
         ) for table in sorted(tables.keys())
     ]
 
+def reset_sequences():
+    # https://wiki.postgresql.org/wiki/Fixing_Sequences
+    return """
+DO $$
+DECLARE fix_sequences text[];
+BEGIN
+    fix_sequences := ARRAY(
+        SELECT
+            'SELECT SETVAL('
+            || quote_literal(quote_ident(PGT.schemaname) || '.' || quote_ident(S.relname))
+            || ', COALESCE(MAX(' || quote_ident(C.attname) || '), 1) ) FROM '
+            || quote_ident(PGT.schemaname) || '.'|| quote_ident(T.relname)
+        FROM
+            pg_class AS S,
+            pg_depend AS D,
+            pg_class AS T,
+            pg_attribute AS C,
+            pg_tables AS PGT
+        WHERE
+            S.relkind = 'S'
+            AND S.oid = D.objid
+            AND D.refobjid = T.oid
+            AND D.refobjid = C.attrelid
+            AND D.refobjsubid = C.attnum
+            AND T.relname = PGT.tablename
+        ORDER BY
+            S.relname
+    );
+    RAISE NOTICE 'fix_sequences=%', fix_sequences;
+    EXECUTE array_to_string(fix_sequences, '; ');
+END $$;
+"""
+
 def rewrite(args):
     infile = args.infile
     outfile = args.outfile
@@ -249,6 +282,7 @@ def rewrite(args):
             'SET escape_string_warning=off;',
             'SET CONSTRAINTS ALL DEFERRED;',
         ] + truncations + inserts + [
+            reset_sequences(),
             'COMMIT;',
         ]
         psql = "{}\n".format("\n".join(statments))
@@ -298,4 +332,3 @@ if __name__ == '__main__':
     else:
         args.settings = {}
     rewrite(args)
-
